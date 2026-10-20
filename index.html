@@ -64,6 +64,13 @@ h1{font-family:var(--hand);font-weight:400;font-size:44px;line-height:1;margin:0
 #fileDlg .opts .btn{width:100%;height:auto;min-height:44px;padding:8px 14px;text-align:left}
 #fileDlg .opts small{display:block;font-weight:400;font-size:12.5px;color:var(--muted)}
 #fileDlg .opts .primary small{color:inherit;opacity:.75}
+#fileDlg .fguide{margin:0 0 14px;padding:10px 12px;border:1.5px dashed var(--line);border-radius:6px;font-size:13.5px}
+#fileDlg .fguide summary{cursor:pointer;font-weight:700;color:var(--ink)}
+#fileDlg .fguide ol{margin:8px 0 6px;padding-left:20px;display:grid;gap:4px}
+#fileDlg .fguide li::marker{font-weight:700;color:var(--accent)}
+#fileDlg .fguide b{color:var(--ink)}
+#fileDlg .fguide .note{margin:6px 0 0;font-size:12.5px}
+#fileDlg .ftip{margin:-4px 0 12px;padding:8px 10px;background:color-mix(in srgb,var(--hl) 30%,transparent);font-size:13px;color:var(--ink)}
 .capture{display:flex;gap:10px;max-width:1280px;margin:10px auto 0;flex-wrap:wrap;align-items:flex-end}
 .capture input[type=text]{flex:1 1 320px;min-width:0;height:44px;padding:0 4px;border:none;border-bottom:2px solid var(--ink);border-radius:0;background:transparent;font-size:16px}
 .capture input[type=text]:focus{outline:none;border-bottom-color:var(--accent)}
@@ -698,7 +705,7 @@ async function writeFile(){
   const h=fileLink.handle;if(!h)return;
   try{const w=await h.createWritable();await w.write(JSON.stringify(buildPayload(),null,2));await w.close();
     fileLink.status="active";fileLink.lastWrite=Date.now();lsSet(BK_KEY,Date.now())}
-  catch(e){fileLink.status="paused"}
+  catch(e){fileLink.status=(e&&(e.name==="NotAllowedError"||e.name==="SecurityError"))?"paused":"error"}
   renderSync();
 }
 function keyOf(id){let k=String(id).replace(/[^\w\-.~:@+]/g,"").slice(0,80);return k.startsWith("p-")?k:"p-"+(k||uid())}
@@ -741,7 +748,7 @@ async function resumeFile(){
   try{const perm=await h.requestPermission({mode:"readwrite"});
     if(perm==="granted"){fileLink.status="active";await syncFromFile();toast("자동 저장을 다시 시작했어요")}
     else toast("권한을 허용해야 파일에 저장할 수 있어요")}
-  catch(e){toast("파일을 찾을 수 없어요. 다시 연결해 주세요");fileLink.status="paused"}
+  catch(e){toast("파일을 찾을 수 없어요. 저장 파일을 다시 정해 주세요");fileLink.status="error"}
   renderSync();
 }
 async function unlinkFile(){fileLink.handle=null;fileLink.status="none";fileLink.lastWrite=0;try{await IDB.del("fileHandle")}catch(e){}renderSync();toast("파일 연결을 해제했어요. 기록은 이 브라우저에 남아 있어요")}
@@ -749,9 +756,13 @@ async function unlinkFile(){fileLink.handle=null;fileLink.status="none";fileLink
 function renderSync(){
   const el=$("#sync"),fb=$("#fileBtn");
   if(state.mode!=="local"){fb.hidden=true;$("#bkBanner").hidden=true;return}
-  if(fileLink.status==="active")el.textContent="파일에 자동 저장"+(fileLink.lastWrite?` (${rel(fileLink.lastWrite)})`:"");
-  else if(fileLink.status==="paused")el.innerHTML='파일 저장 멈춤<button type="button" class="linkbtn" data-file="resume">다시 연결</button>';
-  else el.textContent="이 브라우저에 저장";
+  const fname=fileLink.handle?fileLink.handle.name:"";
+  if(fileLink.status==="active"){el.textContent="파일에 자동 저장"+(fileLink.lastWrite?` (${rel(fileLink.lastWrite)})`:"");el.title=`저장 위치: ${fname}`}
+  else if(fileLink.status==="paused"){el.innerHTML='파일 저장 멈춤<button type="button" class="linkbtn" data-file="resume">다시 연결</button>';
+    el.title="브라우저를 다시 열면 보안상 권한 확인이 한 번 더 필요해요. 기록은 이 브라우저에 그대로 있어요"}
+  else if(fileLink.status==="error"){el.innerHTML='파일에 저장하지 못했어요<button type="button" class="linkbtn" data-file="manage">다시 연결</button>';
+    el.title="파일이 이동·삭제됐을 수 있어요. 기록은 이 브라우저에 그대로 있어요"}
+  else{el.textContent="이 브라우저에 저장";el.title=""}
   fb.hidden=!FILE_OK;fb.textContent=fileLink.handle?"저장 파일":"자동 저장 파일 연결";
   renderBanner();
 }
@@ -768,9 +779,11 @@ function renderBanner(){
 }
 function openFileDlg(){
   const h=fileLink.handle;
-  const status=fileLink.status==="active"?"자동 저장 중":"멈춤 (권한을 다시 허용해야 해요)";
+  const status=fileLink.status==="active"?"자동 저장 중":fileLink.status==="error"?"저장 실패 (파일을 찾을 수 없어요)":"멈춤 (권한을 다시 허용해야 해요)";
+  const tip=fileLink.status==="paused"?'<p class="ftip">브라우저를 다시 열면 보안상 권한이 초기화돼요. <b>다시 연결 → 허용</b>만 누르면 이어서 저장돼요. 기록은 이 브라우저에 그대로 있어요.</p>'
+    :fileLink.status==="error"?'<p class="ftip">파일이 다른 곳으로 옮겨졌거나 지워졌을 수 있어요. 기록은 이 브라우저에 그대로 있으니, <b>다른 새 파일로 바꾸기</b>로 저장 위치를 다시 정해 주세요.</p>':"";
   $("#fileDlgBody").innerHTML=h?`<h2>저장 파일</h2>
-    <p>연결된 파일: <span class="fname">${esc(h.name)}</span><br>상태: ${status}</p>
+    <p>연결된 파일: <span class="fname">${esc(h.name)}</span><br>상태: ${status}</p>${tip}
     <div class="opts">
       ${fileLink.status==="paused"?'<button type="button" class="btn primary" data-file="resume">다시 연결<small>권한을 허용하면 자동 저장이 이어져요</small></button>':""}
       <button type="button" class="btn" data-file="new">다른 새 파일로 바꾸기</button>
@@ -778,16 +791,26 @@ function openFileDlg(){
     </div>
     <div class="row"><button type="button" class="btn small danger ghost" data-file="unlink">연결 해제</button><span class="spacer"></span><button type="button" class="btn small" data-file="close">닫기</button></div>`
   :`<h2>자동 저장 파일 연결</h2>
-    <p>파일을 한 번 정해두면 기록할 때마다 그 파일에 자동으로 저장돼요. Google Drive나 OneDrive 동기화 폴더에 두면 클라우드에도 함께 백업돼요. PC의 크롬·엣지에서만 쓸 수 있어요.</p>
+    <p>저장 파일을 한 번 정하면, 기록할 때마다 자동으로 덮어써요. 구글 드라이브·원드라이브 폴더에 두면 클라우드 백업까지 돼요.</p>
+    <details class="fguide"><summary>처음이라면? 연결하는 법</summary>
+      <ol>
+        <li>아래 <b>새 파일 만들기</b>를 눌러요.</li>
+        <li>저장 위치를 골라요. 추천은 <b>Google Drive (G:) → 내 드라이브</b>, 간단하게는 <b>문서</b> 폴더예요.</li>
+        <li>파일 수정 권한을 물으면 <b>허용</b>을 눌러요. “항상 허용”이 보이면 그걸 고르면 재연결이 줄어요.</li>
+        <li>상단에 <b>파일에 자동 저장 (방금)</b>이 보이면 끝이에요.</li>
+      </ol>
+      <p class="note">브라우저를 다시 열면 <b>다시 연결</b>을 한 번 눌러야 할 수 있어요. 다른 PC에서 이어 쓸 땐 같은 파일을 <b>기존 파일 연결하기</b>로 고르면 돼요. 두 PC에서 동시에 열어두고 쓰면 나중에 저장한 쪽이 덮어써요.</p>
+    </details>
     <div class="opts">
       <button type="button" class="btn primary" data-file="new">새 파일 만들기<small>처음 쓴다면 이쪽이에요</small></button>
       <button type="button" class="btn" data-file="open">기존 파일 연결하기<small>다른 PC에서 쓰던 파일을 이어서 쓸 때</small></button>
     </div>
     <div class="row"><span class="spacer"></span><button type="button" class="btn small" data-file="close">닫기</button></div>`;
-  $("#fileDlg").showModal();
+  if(!$("#fileDlg").open)$("#fileDlg").showModal();
 }
 function fileAction(a){
   if(a==="close"){$("#fileDlg").close();return}
+  if(a==="manage"){openFileDlg();return}
   if($("#fileDlg").open)$("#fileDlg").close();
   if(a==="new")linkNewFile();else if(a==="open")linkExistingFile();else if(a==="resume")resumeFile();else if(a==="unlink")unlinkFile();
 }
