@@ -274,6 +274,24 @@ dialog h2{margin:0 0 14px;font-family:var(--hand);font-weight:400;font-size:34px
 .tadd input:focus{outline:none;border-bottom-color:var(--accent)}
 .tmanage{background:none;border:1.5px dashed var(--line);border-radius:var(--wob);font-size:12px;color:var(--muted);padding:0 8px;margin-left:4px;height:26px;align-self:center}
 .tmanage:hover{color:var(--ink);border-color:var(--ink)}
+/* stale setting */
+.filters .stale-set{margin-left:auto;display:inline-flex;align-items:center;gap:6px;border:1.5px dashed var(--line);border-radius:var(--wob);background:transparent;padding:0 12px;height:34px;align-self:center;font-size:13px;color:var(--muted)}
+.filters .stale-set b{color:var(--warn);font-weight:700}
+.filters .stale-set svg{width:15px;height:15px}
+.filters .stale-set:hover{color:var(--ink);border-color:var(--ink)}
+.filters .stale-set~[data-f=trash]{margin-left:0}
+#staleDlg{width:min(420px,calc(100% - 32px))}
+#staleDlg h2{font-size:32px;margin:0 0 6px}
+.sstep{display:flex;align-items:center;justify-content:center;gap:14px;margin:14px 0 10px}
+.sstep button{width:44px;height:44px;border:2px solid var(--ink);border-radius:var(--wob);background:var(--sheet);font-size:22px;line-height:1}
+.sstep button:disabled{opacity:.3;cursor:default}
+.sstep output{font-family:var(--hand);font-size:46px;min-width:120px;text-align:center;color:var(--warn)}
+.sstep output.off{color:var(--muted);font-size:34px}
+.spresets{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:12px}
+.spresets button{min-width:44px;height:34px;border:1.5px solid var(--line);border-radius:var(--wob);background:transparent;font-size:13px;color:var(--muted);padding:0 10px}
+.spresets button[aria-pressed=true]{border:2px solid var(--accent);color:var(--accent);font-weight:700}
+.sprev{margin:0 0 14px;padding:10px 12px;border:1.5px dashed var(--line);border-radius:var(--wob);font-size:13px;color:var(--muted);line-height:1.5}
+.sprev b{color:var(--ink)}
 /* note editing */
 .edit-box{background:var(--sheet);border:2px solid var(--accent);border-radius:var(--wob);padding:8px 12px 10px}
 .edit-box textarea{border:none;padding:4px 0;background:transparent;resize:none;overflow:hidden;font-size:15.5px;min-height:44px}
@@ -322,6 +340,7 @@ dialog h2{margin:0 0 14px;font-family:var(--hand);font-weight:400;font-size:34px
     <label class="field"><span>상태</span>
       <select id="fStatus"><option value="active">진행 중</option><option value="hold">보류</option><option value="done">완료</option></select></label>
     <label class="field"><span>마감일 (선택)</span><input type="date" id="fDue"></label>
+    <label class="field"><span>멈춤 기준</span><select id="fStale"></select></label>
     <div class="row">
       <button type="button" class="btn small danger ghost" id="fDelete" hidden>휴지통으로 이동</button>
       <span class="spacer"></span>
@@ -336,6 +355,8 @@ dialog h2{margin:0 0 14px;font-family:var(--hand);font-weight:400;font-size:34px
 <dialog id="tourDlg" aria-labelledby="tourTitle"><div id="tourBody"></div></dialog>
 
 <dialog id="typeDlg" aria-labelledby="typeTitle"><div id="typeBody"></div></dialog>
+
+<dialog id="staleDlg" aria-labelledby="staleTitle"><div id="staleBody"></div></dialog>
 
 <script>
 (function(){
@@ -363,10 +384,11 @@ function applyTypes(list){
   if(!TYPE_LABEL[state.draftType])state.draftType="memo";
 }
 const STATUS={active:"진행 중",hold:"보류",done:"완료"};
-const STALE_DAYS=7;
+const STALE_DEFAULT=3,STALE_MAX=60,STALE_PRESETS=[1,3,5,7,14,30];
+function cleanStale(v,fallback){const n=Number(v);return v!==null&&v!==undefined&&v!==""&&Number.isInteger(n)&&n>=0&&n<=STALE_MAX?n:fallback}
 const LOCAL_KEY="tabboard-v1";
 
-const state={projects:{},inbox:{notes:[]},filter:"active",openId:null,tlType:"all",draftType:"memo",mode:null,col:null,lastCapProject:"inbox"};
+const state={projects:{},inbox:{notes:[]},filter:"active",openId:null,tlType:"all",draftType:"memo",staleDays:STALE_DEFAULT,mode:null,col:null,lastCapProject:"inbox"};
 const chains={};
 
 /* ---------- helpers ---------- */
@@ -399,15 +421,18 @@ function toast(msg,action){let el=$(".toast");if(!el){el=document.createElement(
   if(action){const b=document.createElement("button");b.type="button";b.className="toast-act";b.textContent=action.label;b.onclick=()=>{el.remove();action.fn()};el.appendChild(b)}
   clearTimeout(toastT);toastT=setTimeout(()=>el.remove(),action?5000:2200)}
 function tilt(id){let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))|0;return ((Math.abs(h)%33)-16)/10}
+function lastNoteAt(p){const n=p.notes||[];return n.length?Math.max(...n.map(x=>x.ts)):(p.createdAt||p.updatedAt||0)}
+function staleLimit(p){return p.staleDays===undefined||p.staleDays===null?state.staleDays:p.staleDays}
+function staleInfo(p){const lim=staleLimit(p),at=lastNoteAt(p),d=daysSince(at);return {on:p.status==="active"&&!p.deletedAt&&lim>0&&at>0&&d>=lim,days:d,lim}}
 function lastActivity(p){const n=p.notes||[];return Math.max(p.updatedAt||0,...n.map(x=>x.ts))}
 
 /* ---------- storage ---------- */
-function saveLocal(){try{localStorage.setItem(LOCAL_KEY,JSON.stringify({projects:state.projects,inbox:state.inbox,types:state.types}));localStorage.setItem(SAVED_KEY,String(Date.now()))}catch(e){toast("이 브라우저에 저장할 수 없어요")}
+function saveLocal(){try{localStorage.setItem(LOCAL_KEY,JSON.stringify({projects:state.projects,inbox:state.inbox,types:state.types,staleDays:state.staleDays}));localStorage.setItem(SAVED_KEY,String(Date.now()))}catch(e){toast("이 브라우저에 저장할 수 없어요")}
   scheduleFileWrite();renderSync()}
-function loadLocal(){try{const r=JSON.parse(localStorage.getItem(LOCAL_KEY)||"null");if(r){state.projects=r.projects||{};state.inbox=r.inbox||{notes:[]};applyTypes(r.types)}}catch(e){}}
+function loadLocal(){try{const r=JSON.parse(localStorage.getItem(LOCAL_KEY)||"null");if(r){state.projects=r.projects||{};state.inbox=r.inbox||{notes:[]};applyTypes(r.types);state.staleDays=cleanStale(r.staleDays,STALE_DEFAULT)}}catch(e){}}
 function persist(id){
   if(state.mode!=="db"){saveLocal();return}
-  const data=id==="inbox"?state.inbox:id==="settings"?{types:state.types}:state.projects[id];
+  const data=id==="inbox"?state.inbox:id==="settings"?{types:state.types,staleDays:state.staleDays}:state.projects[id];
   chains[id]=(chains[id]||Promise.resolve()).then(()=>data?state.col.doc(id).set(clone(data)):state.col.doc(id).delete())
     .catch(e=>{if(e&&e.code==="invalid_argument"&&state.mode==="db"){state.mode="local";saveLocal();$("#sync").textContent="이 브라우저에 저장";toast("이 계정은 저장 권한이 없어 브라우저에 저장할게요");return}
       toast(e&&e.code==="quota_exceeded"?"저장 공간이 가득 찼어요. 오래된 기록을 정리해 주세요":"저장하지 못했어요. 잠시 후 다시 시도해 주세요")});
@@ -426,9 +451,9 @@ async function init(){
     state.mode="db";state.col=db.collection("data/users/"+id);
     $("#sync").textContent="계정에 자동 저장";
     state.col.onSnapshot(snap=>{
-      const projects={};let inbox={notes:[]},types=null;
-      snap.docs.forEach(d=>{if(d.id==="inbox")inbox=clone(d.data());else if(d.id==="settings")types=clone(d.data()).types;else projects[d.id]=clone(d.data())});
-      applyTypes(types);
+      const projects={};let inbox={notes:[]},types=null,stale=STALE_DEFAULT;
+      snap.docs.forEach(d=>{if(d.id==="inbox")inbox=clone(d.data());else if(d.id==="settings"){const sd=clone(d.data());types=sd.types;stale=cleanStale(sd.staleDays,STALE_DEFAULT)}else projects[d.id]=clone(d.data())});
+      applyTypes(types);state.staleDays=stale;
       state.projects=projects;state.inbox=inbox;if(!state.inbox.notes)state.inbox.notes=[];
       renderAll(true);
     },err=>{$("#sync").textContent="동기화가 끊겼어요. 새로고침해 주세요"});
@@ -469,19 +494,20 @@ function renderFilters(){
   const all=Object.values(state.projects).filter(p=>!p.deletedAt);const trashN=Object.keys(state.projects).length-all.length;
   const f=[["active","진행 중"],["hold","보류"],["done","완료"],["all","전체"],["trash","휴지통"]];
   $("#filters").innerHTML=f.map(([k,v])=>{const n=k==="trash"?trashN:k==="all"?all.length:all.filter(p=>p.status===k).length;
-    return `<button type="button" data-f="${k}" aria-pressed="${state.filter===k}">${v} ${n}</button>`}).join("");
+    return `<button type="button" data-f="${k}" aria-pressed="${state.filter===k}">${v} ${n}</button>`}).join("")
+    .replace('<button type="button" data-f="trash"',`<button type="button" class="stale-set" id="staleBtn" aria-haspopup="dialog">${STALE_ICON}멈춤 기준 <b>${state.staleDays?state.staleDays+"일":"끔"}</b></button><button type="button" data-f="trash"`);
 }
 function cardHTML(id,p){
-  const la=lastActivity(p);const last=(p.notes||[]).slice(-1)[0];
-  const stale=p.status==="active"&&daysSince(la)>=STALE_DAYS&&la>0;
+  const ln=lastNoteAt(p);const last=(p.notes||[]).slice(-1)[0];
+  const st=staleInfo(p);
   const dd=dday(p.due);const openTodos=(p.notes||[]).filter(n=>n.type==="todo"&&!n.done).length;
   return `<button type="button" class="card" data-open="${id}" style="--c:${esc(p.color)};--r:${tilt(id)}deg">
     <span class="tab"><span class="swatch"></span><span class="nm">${esc(p.name)}</span></span>
-    <span class="meta"><span class="pill">${STATUS[p.status]||"진행 중"}</span>${dd?`<span class="pill due">${dd}</span>`:""}${stale?`<span class="pill stale">${daysSince(la)}일째 멈춤</span>`:""}</span>
+    <span class="meta"><span class="pill">${STATUS[p.status]||"진행 중"}</span>${dd?`<span class="pill due">${dd}</span>`:""}${st.on?`<span class="pill stale" title="${st.lim}일 넘게 새 기록이 없어요">${st.days}일째 멈춤</span>`:""}</span>
     <span class="next-label">멈춘 지점</span>
     <span class="next ${p.next?"":"empty"}">${p.next?esc(p.next):"다음에 할 일을 한 줄 남겨두세요"}</span>
     <span class="last">${last?`<span class="chip t-${last.type}">${esc(TYPE_LABEL[last.type]||"메모")}</span><p>${esc(last.text)}</p>`:"아직 기록이 없어요"}</span>
-    <span class="foot"><span>마지막 기록 ${rel(la)}</span><span>${openTodos?`할 일 ${openTodos}`:""}</span></span>
+    <span class="foot"><span>${(p.notes||[]).length?`마지막 기록 ${rel(ln)}`:"아직 기록 없음"}</span><span>${openTodos?`할 일 ${openTodos}`:""}</span></span>
   </button>`;
 }
 function renderGrid(){
@@ -616,6 +642,8 @@ function openProjDlg(id){
   editing=id||null;const p=id?state.projects[id]:null;
   $("#projDlgTitle").textContent=p?"프로젝트 설정":"새 프로젝트";
   $("#fName").value=p?p.name:"";$("#fStatus").value=p?p.status:"active";$("#fDue").value=p?.due||"";
+  $("#fStale").innerHTML=`<option value="">기본값 따르기 (${state.staleDays?state.staleDays+"일":"끔"})</option>`+STALE_PRESETS.concat(p&&p.staleDays>0&&!STALE_PRESETS.includes(p.staleDays)?[p.staleDays]:[]).sort((a,b)=>a-b).map(d=>`<option value="${d}">${d}일</option>`).join("")+'<option value="0">이 프로젝트는 표시 안 함</option>';
+  $("#fStale").value=p&&p.staleDays!==undefined&&p.staleDays!==null?String(p.staleDays):"";
   pickColor=p?p.color:COLORS[Object.keys(state.projects).length%COLORS.length];
   $("#fColors").innerHTML=COLORS.map(c=>`<button type="button" style="--c:${c}" data-color="${c}" aria-label="색상 ${c}" aria-pressed="${c===pickColor}"></button>`).join("");
   $("#fDelete").hidden=!p;$("#projDlg").showModal();$("#fName").focus();
@@ -626,12 +654,46 @@ $("#fCancel").addEventListener("click",()=>$("#projDlg").close());
 $("#projForm").addEventListener("submit",e=>{
   const name=$("#fName").value.trim();if(!name){e.preventDefault();return}
   const now=Date.now();
-  if(editing){Object.assign(state.projects[editing],{name,color:pickColor,status:$("#fStatus").value,due:$("#fDue").value,updatedAt:now});persist(editing)}
-  else{const id="p-"+uid();state.projects[id]={name,color:pickColor,status:$("#fStatus").value,due:$("#fDue").value,next:"",notes:[],createdAt:now,updatedAt:now};persist(id);
+  const sv=$("#fStale").value;
+  if(editing){const ep=state.projects[editing];Object.assign(ep,{name,color:pickColor,status:$("#fStatus").value,due:$("#fDue").value,updatedAt:now});
+    if(sv==="")delete ep.staleDays;else ep.staleDays=Number(sv);persist(editing)}
+  else{const id="p-"+uid();state.projects[id]={name,color:pickColor,status:$("#fStatus").value,due:$("#fDue").value,next:"",notes:[],createdAt:now,updatedAt:now};
+    if(sv!=="")state.projects[id].staleDays=Number(sv);persist(id);
     if(state.filter!=="all"&&state.filter!==state.projects[id].status)state.filter="all"}
   renderAll();toast(editing?"설정을 저장했어요":"프로젝트를 추가했어요");
 });
 $("#fDelete").addEventListener("click",()=>{if(!editing)return;const id=editing;$("#projDlg").close();trashProject(id)});
+
+/* ---------- stale setting ---------- */
+const STALE_ICON='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8.5" r="6"/><path d="M8 5.2v3.5l2.2 1.4"/></svg>';
+let staleDraft=STALE_DEFAULT;
+function stalePreview(n){
+  const act=Object.values(state.projects).filter(p=>!p.deletedAt&&p.status==="active");
+  const hit=act.filter(p=>{const own=p.staleDays!==undefined&&p.staleDays!==null;const lim=own?p.staleDays:n;const at=lastNoteAt(p);return lim>0&&at>0&&daysSince(at)>=lim});
+  const own=act.filter(p=>p.staleDays!==undefined&&p.staleDays!==null).length;
+  return `${n?`진행 중 프로젝트 ${act.length}개 중 <b>${hit.length}개</b>에 멈춤 표시가 붙어요.`:`멈춤 표시를 끄면 기본값을 따르는 카드에는 표시가 붙지 않아요.${hit.length?` (프로젝트별로 따로 정한 ${hit.length}개는 표시돼요)`:""}`}${own?`<br>프로젝트 설정에서 기준을 따로 정한 ${own}개는 그 기준을 따라요.`:""}`;
+}
+function renderStaleDlg(){
+  const n=staleDraft;
+  $("#staleBody").innerHTML=`<h2 id="staleTitle">멈춤 기준</h2>
+    <p class="tdesc">마지막 기록 이후 이 기간 동안 <b>새 기록이 없으면</b> 진행 중 카드에 'n일째 멈춤'이 붙어요. 멈춘 지점이나 설정만 고친 건 기록으로 치지 않아요.</p>
+    <div class="sstep"><button type="button" data-sdelta="-1" aria-label="하루 줄이기" ${n<=1?"disabled":""}>−</button>
+      <output id="staleOut" aria-live="polite" class="${n?"":"off"}">${n?n+"일":"끔"}</output>
+      <button type="button" data-sdelta="1" aria-label="하루 늘리기" ${n>=STALE_MAX?"disabled":""}>+</button></div>
+    <div class="spresets" role="group" aria-label="자주 쓰는 기준">${STALE_PRESETS.map(d=>`<button type="button" data-sset="${d}" aria-pressed="${n===d}">${d}일</button>`).join("")}<button type="button" data-sset="0" aria-pressed="${n===0}">끄기</button></div>
+    <p class="sprev">${stalePreview(n)}</p>
+    <div class="row"><button type="button" class="btn small ghost" data-sset="${STALE_DEFAULT}">기본값(${STALE_DEFAULT}일)으로</button><span class="spacer"></span>
+      <button type="button" class="btn small" data-sclose>취소</button><button type="button" class="btn small primary" data-ssave>저장</button></div>`;
+}
+function openStaleDlg(){staleDraft=state.staleDays;renderStaleDlg();$("#staleDlg").showModal()}
+$("#filters").addEventListener("click",e=>{if(e.target.closest("#staleBtn"))openStaleDlg()});
+$("#staleDlg").addEventListener("click",e=>{const t=e.target;
+  if(t===$("#staleDlg")||t.closest("[data-sclose]")){$("#staleDlg").close();return}
+  const d=t.closest("[data-sdelta]");if(d){staleDraft=Math.min(STALE_MAX,Math.max(1,(staleDraft||0)+Number(d.dataset.sdelta)));renderStaleDlg();$(`[data-sdelta="${d.dataset.sdelta}"]`)?.focus();return}
+  const s=t.closest("[data-sset]");if(s){staleDraft=Number(s.dataset.sset);renderStaleDlg();return}
+  if(t.closest("[data-ssave]")){state.staleDays=staleDraft;persist("settings");$("#staleDlg").close();renderAll();
+    toast(staleDraft?`${staleDraft}일 동안 기록이 없으면 멈춤으로 표시할게요`:"멈춤 표시를 껐어요")}
+});
 
 /* ---------- backup ---------- */
 let downloadsApi=null;
@@ -655,6 +717,7 @@ function cleanProject(p){if(!p||typeof p.name!=="string"||!p.name.trim())return 
   const o={name:p.name.slice(0,60),color:HEX.test(p.color)?p.color:COLORS[0],status:STATUS[p.status]?p.status:"active",
     due:/^\d{4}-\d{2}-\d{2}$/.test(p.due||"")?p.due:"",next:typeof p.next==="string"?p.next.slice(0,300):"",
     notes:(Array.isArray(p.notes)?p.notes:[]).map(cleanNote).filter(Boolean),createdAt:Number(p.createdAt)||Date.now(),updatedAt:Number(p.updatedAt)||Date.now()};
+  const sd=cleanStale(p.staleDays,null);if(sd!==null)o.staleDays=sd;
   if(p.deletedAt)o.deletedAt=Number(p.deletedAt)||Date.now();return o}
 function mergeNotes(a,b){const seen=new Set(a.map(n=>n.id));b.forEach(n=>{if(!seen.has(n.id)){a.push(n);seen.add(n.id)}});a.sort((x,y)=>x.ts-y.ts);return a}
 async function importBackup(file){
@@ -683,7 +746,7 @@ const lsSet=(k,v)=>{try{localStorage.setItem(k,String(v))}catch(e){}};
 const FILE_OK=(()=>{try{return "showSaveFilePicker" in window&&"showOpenFilePicker" in window&&window.self===window.top}catch(e){return false}})();
 const fileLink={handle:null,status:"none",lastWrite:0,timer:null};
 const JSON_TYPES=[{description:"탭 보드 데이터",accept:{"application/json":[".json"]}}];
-function buildPayload(){return {app:"tab-board",version:1,exportedAt:new Date().toISOString(),savedAt:lsGet(SAVED_KEY)||Date.now(),types:state.types,projects:state.projects,inbox:state.inbox}}
+function buildPayload(){return {app:"tab-board",version:1,exportedAt:new Date().toISOString(),savedAt:lsGet(SAVED_KEY)||Date.now(),types:state.types,staleDays:state.staleDays,projects:state.projects,inbox:state.inbox}}
 function markBackedUp(){lsSet(BK_KEY,Date.now());renderSync()}
 const IDB={open(){return new Promise((res,rej)=>{const r=indexedDB.open("tabboard",1);r.onupgradeneeded=()=>r.result.createObjectStore("kv");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})},
   async run(mode,fn){const d=await IDB.open();return new Promise((res,rej)=>{const tx=d.transaction("kv",mode);const st=tx.objectStore("kv");const r=fn(st);tx.oncomplete=()=>res(r&&r.result);tx.onerror=()=>rej(tx.error)})},
@@ -713,7 +776,7 @@ function parseBoard(raw){
   if(!raw||typeof raw.projects!=="object"||!raw.projects||Array.isArray(raw.projects))return null;
   const projects={};Object.entries(raw.projects).forEach(([id,p])=>{const c=cleanProject(p);if(c)projects[keyOf(id)]=c});
   const inbox={notes:(raw.inbox&&Array.isArray(raw.inbox.notes)?raw.inbox.notes:[]).map(cleanNote).filter(Boolean)};
-  return {projects,inbox,types:Array.isArray(raw.types)?raw.types:null,savedAt:Number(raw.savedAt)||Date.parse(raw.exportedAt)||0};
+  return {projects,inbox,types:Array.isArray(raw.types)?raw.types:null,staleDays:cleanStale(raw.staleDays,null),savedAt:Number(raw.savedAt)||Date.parse(raw.exportedAt)||0};
 }
 async function syncFromFile(){
   const h=fileLink.handle;if(!h)return;
@@ -724,8 +787,8 @@ async function syncFromFile(){
   if(fileHas&&(!localHas||board.savedAt>lsGet(SAVED_KEY))){
     const when=board.savedAt?`${dayKey(board.savedAt)} ${hm(board.savedAt)}`:"알 수 없음";
     const ok=!localHas||confirm(`연결된 파일에 이 브라우저보다 최근 기록이 있어요 (파일 저장: ${when}).\n파일 내용으로 바꿀까요?\n\n취소를 누르면 이 브라우저의 기록이 파일에 덮어써져요.`);
-    if(ok){state.projects=board.projects;state.inbox=board.inbox;state.openId=null;if(board.types)applyTypes(board.types);
-      try{localStorage.setItem(LOCAL_KEY,JSON.stringify({projects:state.projects,inbox:state.inbox,types:state.types}));localStorage.setItem(SAVED_KEY,String(board.savedAt||Date.now()))}catch(e){}
+    if(ok){state.projects=board.projects;state.inbox=board.inbox;state.openId=null;if(board.types)applyTypes(board.types);if(board.staleDays!==null)state.staleDays=board.staleDays;
+      try{localStorage.setItem(LOCAL_KEY,JSON.stringify({projects:state.projects,inbox:state.inbox,types:state.types,staleDays:state.staleDays}));localStorage.setItem(SAVED_KEY,String(board.savedAt||Date.now()))}catch(e){}
       renderAll();toast("파일의 기록을 불러왔어요");fileLink.lastWrite=Date.now();lsSet(BK_KEY,Date.now());renderSync();return}
   }
   await writeFile();
@@ -887,7 +950,7 @@ const TOUR=[
    v:`<div class="tv-note" style="--c:#2B59FF;--r:-2.5deg"><b class="tv-name">졸업 작품</b><small>멈춘 지점</small><strong>2차 판넬 렌더 컷 추가</strong></div>
       <div class="tv-note" style="--c:#12A594;--r:2deg"><b class="tv-name">공모전</b><small>멈춘 지점</small><strong>컨셉 문장 다듬기</strong></div>`},
   {t:"① 프로젝트를 포스트잇으로",
-   d:()=>"<b>+ 프로젝트 추가</b>로 진행 중인 일을 등록하세요. 색, 상태, 마감일을 정할 수 있고, 7일 넘게 손대지 않으면 <b>n일째 멈춤</b> 표시가 붙어요. 이름이나 상태는 카드를 연 뒤 <b>설정</b>에서 바꿀 수 있어요.",
+   d:()=>`<b>+ 프로젝트 추가</b>로 진행 중인 일을 등록하세요. 색, 상태, 마감일을 정할 수 있고, ${state.staleDays?`<b>${state.staleDays}일</b> 동안 새 기록이 없으면 <b>n일째 멈춤</b> 표시가 붙어요(기준은 목록 위 <b>멈춤 기준</b>에서 바꿀 수 있어요).`:"<b>멈춤 기준</b>을 켜면 오래 기록이 없는 카드에 <b>n일째 멈춤</b> 표시가 붙어요."} 이름이나 상태는 카드를 연 뒤 <b>설정</b>에서 바꿀 수 있어요.`,
    v:`<div class="tv-note" style="--c:#E5484D;--r:-1.5deg"><b class="tv-name">인간공학 과제</b><span class="tv-pill">9일째 멈춤</span><small>멈춘 지점</small><strong>설문 문항 정리</strong></div>
       <div class="tv-add">+ 프로젝트<br>추가</div>`},
   {t:"② 떠오르면 바로 적기",
